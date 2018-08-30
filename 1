@@ -1,0 +1,92 @@
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import GradientBoostingClassifier
+import matplotlib.pyplot as plt
+import Houghspace1
+import time
+from sklearn import metrics
+from sklearn.metrics import roc_curve, auc
+from sklearn.cross_validation import train_test_split
+
+seed=10
+
+signals = pd.read_csv("/home/wangkaipu/IHEP/data/raw_signals.csv")
+backgrounds = pd.read_csv("/home/wangkaipu/IHEP/data/raw_backgrounds.csv")
+alldata = pd.concat([signals,backgrounds])
+train ,test = train_test_split(alldata,test_size=0.5,random_state=40)
+hough=Houghspace1.Houghspace()
+t0=time.time()
+x_columns = [x for x in train if x in [  'r','phi','lt', 'rt', 'mdetmt0', 'le', 'me', 're','layer']]
+X = train[x_columns]
+y = train['isSignal']
+z_columns = [x for x in test if x in ['r','phi', 'lt', 'rt', 'mdetmt0', 'le', 'me', 're', 'layer']]
+Z = test[z_columns]
+z = test['isSignal']
+
+local_gbdt = GradientBoostingClassifier(random_state=10, learning_rate=0.1, n_estimators=80, min_samples_leaf=20,
+                                        max_features='sqrt', subsample=0.8, max_depth=13, min_samples_split=500)
+
+local_gbdt.fit(X,y)
+z_pre = local_gbdt.predict(Z)
+z_pre_prob = local_gbdt.predict_proba(Z)[:, 1]
+
+train=train[:5000]
+test = test[:5000]
+x_columns = [x for x in train if x in [  'r','phi','lt', 'rt', 'mdetmt0', 'le', 'me', 're','layer']]
+X = train[x_columns]
+y = train['isSignal']
+c_columns = [x for x in test if x in ['r','phi', 'lt', 'rt', 'mdetmt0', 'le', 'me', 're', 'layer']]
+C = test[z_columns]
+c = test['isSignal']
+c_pre_prob=z_pre_prob[:5000]
+
+xy_s = np.column_stack((train['xe0'], train['ye0']))
+xy_b = np.column_stack((test['xe0'], test['ye0']))
+vresult,  vt_sig,vt_bak,vresult_sig = Houghspace1.vot_weight(xy_s, xy_b)
+weit_test_hough = vt_bak * c_pre_prob
+
+local_gbdt1 = GradientBoostingClassifier(random_state=10, learning_rate=0.1, n_estimators=80, min_samples_leaf=20,
+                                        max_features='sqrt', subsample=0.8, max_depth=13, min_samples_split=500)
+local_gbdt1.fit(C,c,sample_weight=weit_test_hough)
+a_pre = local_gbdt1.predict(X)
+a_pre_prob = local_gbdt1.predict_proba(X)[:, 1]
+a_score = local_gbdt1.score(X,y,sample_weight=vt_sig)
+t1=time.time()
+t=t1-t0
+print("time consuming:%.4f s" % t)
+print("Accuracy: %.4g" % metrics.accuracy_score(z, z_pre))
+print("Pro_Accuracy: %.4g" % metrics.roc_auc_score(z, z_pre_prob))
+print("The results of Houghtrsnsform:")
+print("Accuracy: %.4g" % metrics.accuracy_score(y, a_pre))
+print("Pro_Accuracy: %.4g" % metrics.roc_auc_score(y, a_pre_prob))
+print("Pro_Accuracy_Hough:%.4g" % metrics.roc_auc_score(y,a_pre_prob,sample_weight=vt_sig))
+
+
+# plot fpr and tpr
+fpr, tpr, thresholds = roc_curve(z, z_pre_prob)
+fpr_hough, tpr_hough, thresholds_hough = roc_curve(y, a_pre_prob)
+roc_auc = auc(fpr, tpr)
+roc_auc_hough = auc(fpr_hough,tpr_hough)
+
+fig = plt.figure(figsize=(8, 4))
+ax1 = fig.add_subplot(121)
+plt.title('Receiver Operating Characteristic')
+ax1.plot(fpr, tpr, 'b', label='AUC = %0.4f' % roc_auc)
+ax1.legend(loc='lower right')
+ax1.plot([0, 1], [0, 1], 'r--')
+ax1.set_xlim([-0.1, 1.2])
+ax1.set_ylim([-0.1, 1.2])
+ax1.set_ylabel('True Positive Rate')
+ax1.set_xlabel('False Positive Rate')
+
+ax2 = fig.add_subplot(122)
+plt.title('Receiver Operating Characteristic')
+
+ax2.plot(fpr_hough, tpr_hough, 'g', label='AUC = %0.4f' % roc_auc_hough)
+ax2.legend(loc='lower right')
+ax2.plot([0,1],[0,1],'r--')
+ax2.set_xlim([-0.1, 1.2])
+ax2.set_ylim([-0.1, 1.2])
+ax2.set_ylabel('True Positive Rate')
+ax2.set_xlabel('False Positive Rate')
+plt.show()
